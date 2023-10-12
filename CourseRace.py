@@ -17,6 +17,8 @@ headers = {
 # }
 
 # add class info here
+# these three are examples
+# you can copy them and change bjdm to your course
 juzhen_zgc01_data = {
     'bjdm': '20231-17-1700002-1688866107858',
     'lx': '0',
@@ -35,9 +37,9 @@ juzhen_zgc05_data = {
 
 courseList = [
     # add class info struct here
-    # juzhen_zgc01_data,
-    # juzhen_zgc02_data,
-    # juzhen_zgc05_data
+    juzhen_zgc01_data,
+    juzhen_zgc02_data,
+    juzhen_zgc05_data
 ]
 
 def chooseCourse(course):

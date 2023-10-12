@@ -19,6 +19,8 @@
 
    ```python
    # add class info here
+   # this is example
+   # you can copy it and change bjdm to your course
    juzhen_zgc01_data = {
        'bjdm': '20231-17-1700002-1688866107858',
        'lx': '0',
