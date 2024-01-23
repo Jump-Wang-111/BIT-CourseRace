@@ -28,7 +28,7 @@ optional arguments:
 ​	假设要选高级工程管理（0018002）、波动力学（0100002）和最优化理论与方法（1200008），那么使用方法如下：
 
 ```shell
- python .\CourseRace.py -c "EMAP_LANG=zh; _WEU=NZv8lxlDeSUU9noetDIbg7wUXlwPKSKHzWv_6inB1k4OjF5mYduW1tI7wo7I9H_hCifzuRRNlk7mWkpV2B4Ain4CusUEBuxJ; JSESSIONID=3CF142AEC95B962C9763E7208515C812; route=ca1d7f4b7ee30cb5db90886138f378d1; XK_TOKEN=3f77b3d5-eabd-4de1-bfc5-26eca9cef589" -i 0018002 0100002 1200008
+ python .\CourseRace.py -c "your cookie" -i 0018002 0100002 1200008
 ```
 
 ## Usage by hand
