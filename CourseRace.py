@@ -8,20 +8,28 @@ import argparse
 
 requests.packages.urllib3.disable_warnings()
 sourceUrl = 'https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/xsxkCourse/choiceCourse.do?_='
+sourceUrl_vpn = 'https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/xsxkCourse/choiceCourse.do?vpn-12-o2-xk.bit.edu.cn&_='
+
 infoPage = 'https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/xsxkHome/loadPublicInfo_course.do'
+infoPage_vpn = 'https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/xsxkHome/loadPublicInfo_course.do?vpn-12-o2-xk.bit.edu.cn'
+
 OutPlanCoursePage = 'https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/xsxkCourse/loadGxkCourseInfo.do?_='
+OutPlanCoursePage_vpn = 'https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/xsxkCourse/loadGxkCourseInfo.do?vpn-12-o2-xk.bit.edu.cn&_='
+
 InPlanCoursePage = 'https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/xsxkCourse/loadJhnCourseInfo.do?_='
+InPlanCoursePage_vpn = 'https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/xsxkCourse/loadJhnCourseInfo.do?vpn-12-o2-xk.bit.edu.cn&_='
+
 OutPlanCoursePath = './OutPlanCourses.json'
 InPlanCoursePath = './InPlanCourses.json'
 
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-    'Cookie': 'EMAP_LANG=zh; _WEU=qmZf97QOWWz0RhkB3cWfF8kxXxAnCMO8XGMI9OPDoT_sHIABqOub*zCB*MXoa0NlW0EUTfr7VZDiPqj0x28MxY1clsZ*BxBX; JSESSIONID=30E16605E409D96A020F31833BEB4419; route=ca1d7f4b7ee30cb5db90886138f378d1; XK_TOKEN=903d8dd2-a849-400a-9d76-1d73b8d0c18a'  # add your cookie here
+    'Cookie': ''  # add your cookie here
 }
 
 # add class info here
-# these three are examples
-# you can copy them and change bjdm to your course
+# this is examples
+# you can copy it and change bjdm to your course
 juzhen_zgc01_data = {
     'bjdm': '20231-17-1700002-1688866107858',
     'lx': '0',
@@ -33,12 +41,21 @@ courseList = [
     
 ]
 
+
 def printErr(string):
     print('\033[31m' + string + '\033[0m')
 
 
 def printOK(string):
     print('\033[32m' + string + '\033[0m')
+
+
+def setVPN():
+    global sourceUrl, infoPage, InPlanCoursePage, OutPlanCoursePage
+    sourceUrl = sourceUrl_vpn
+    infoPage = infoPage_vpn
+    InPlanCoursePage = InPlanCoursePage_vpn
+    OutPlanCoursePage = OutPlanCoursePage_vpn
 
 
 def getCourseList():
@@ -161,10 +178,17 @@ if __name__ == '__main__':
                          dest="courseID",
                          nargs='+',
                          help="ID of courses, split with space")
+    parser.add_argument("-v", "--vpn",
+                         dest="vpn",
+                         action='store_true',
+                         help="if you choose course through webvpn, then use this")
     args = parser.parse_args()
     headers['Cookie'] = args.cookie
 
-    if not os.path.exists(InPlanCoursePath) or not os.path.exists(InPlanCoursePath):
+    if args.vpn is True:
+        setVPN()
+
+    if not os.path.exists(InPlanCoursePath) or not os.path.exists(OutPlanCoursePath):
         getCourseList()
     
     findCourse(args.courseID)
@@ -175,5 +199,4 @@ if __name__ == '__main__':
     # csrfToken = json.loads(res.text)['csrfToken']
     # for course in courseList:
     #     course['csrfToken'] = csrfToken
-
-    # chooseCourse(courseList[3])
+    
