@@ -38,6 +38,12 @@ optional arguments:
  python .\CourseRace.py -v -c "your cookie" -i 0018002 0100002 1200008
 ```
 
+​	如果想要查看每次抢课请求的结果（或确认脚本是否正常工作），那么请添加`-d`或`--debug`选项
+
+```shell
+ python .\CourseRace.py -d -c "your cookie" -i 0018002 0100002 1200008
+```
+
 ## Usage by hand
 
 ​	脚本默认排除非全课程以及良乡课程，如果有相关需求、或出现脚本没能识别的课程，请用以下方式手动添加课程
