@@ -13,17 +13,18 @@ pip install -r requirements.txt
 ​	运行脚本，指定cookie和课程代码，课程代码可以输入多个
 
 ```
-usage: CourseRace.py [-h] [-c COOKIE] [-i COURSEID [COURSEID ...]] [-v]
+usage: CourseRace.py [-h] [-c COOKIE] [-i COURSEID [COURSEID ...]] [-v] [-d]
 
 BIT Course Race. A script to help masters get courses.
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -c COOKIE, --cookie COOKIE
                         Cookie copied from your web browser(after logging in sucessfully)
   -i COURSEID [COURSEID ...], --courseID COURSEID [COURSEID ...]
                         ID of courses, split with space
   -v, --vpn             if you choose course through webvpn, then use this
+  -d, --debug           if you want to show debug messages, then use this
 ```
 
 ​	假设要选高级工程管理（0018002）、波动力学（0100002）和最优化理论与方法（1200008），那么使用方法如下：
