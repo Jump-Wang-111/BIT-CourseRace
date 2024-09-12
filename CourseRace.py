@@ -1,4 +1,6 @@
 import requests
+requests.packages.urllib3.disable_warnings()
+
 from prettytable import PrettyTable
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -6,7 +8,8 @@ import os
 import json
 import argparse
 
-requests.packages.urllib3.disable_warnings()
+import logging
+
 sourceUrl = 'https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/xsxkCourse/choiceCourse.do?_='
 sourceUrl_vpn = 'https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/xsxkCourse/choiceCourse.do?vpn-12-o2-xk.bit.edu.cn&_='
 
@@ -58,6 +61,32 @@ def setVPN():
     OutPlanCoursePage = OutPlanCoursePage_vpn
 
 
+def is_valid_json(json_str):
+    try:
+        json.loads(json_str)
+        return True
+    except json.JSONDecodeError as e:
+        printErr("[-] Fail to catch courses. ERROR:" + str(e))
+        return False
+
+
+def postData(reqCourseList, req_data):
+    try:
+        res = requests.post(url=reqCourseList, data=req_data, headers=headers, verify=False)
+        res.raise_for_status()
+        return res
+    except requests.exceptions.HTTPError as errh:
+        printErr("[-] Fail to catch courses. HTTP ERROR:" + str(errh))
+    except requests.exceptions.ConnectionError as errc:
+        printErr("[-] Fail to catch courses. Connection ERROR:" + str(errc))
+    except requests.exceptions.Timeout as errt:
+        printErr("[-] Fail to catch courses. Timeout ERROR:" + str(errt))
+    except requests.exceptions.RequestException as err:
+        printErr("[-] Fail to catch courses. Unknown ERROR:" + str(err))
+    
+    return None
+
+
 def getCourseList():
 
     req_data = {
@@ -71,43 +100,36 @@ def getCourseList():
         'sortField':            '',
         'sortOrder':            '',
     }
+
     print('[*] Try to catch courses out of plan...')
 
     timestamp = int(round(time.time() * 1000))
     reqCourseList = OutPlanCoursePage + str(timestamp)
-    try:
-        res = requests.post(url=reqCourseList, data=req_data, headers=headers, verify=False)
-        res.raise_for_status()
-        with open(OutPlanCoursePath, 'w', encoding='utf8') as f:
-            f.write(res.text)
-        print('[+] Success. Courses have been saved in ' + OutPlanCoursePath)
-    except requests.exceptions.HTTPError as errh:
-        printErr("[-] Fail to catch courses. HTTP ERROR:" + errh)
-    except requests.exceptions.ConnectionError as errc:
-        printErr("[-] Fail to catch courses. Connection ERROR:" + errc)
-    except requests.exceptions.Timeout as errt:
-        printErr("[-] Fail to catch courses. Timeout ERROR:" + errt)
-    except requests.exceptions.RequestException as err:
-        printErr("[-] Fail to catch courses. Unknown ERROR:" + err)   
+    
+    res = postData(reqCourseList, req_data)
+    if not res:
+        exit(1)
+    if not is_valid_json(res.text):
+        exit(1)
+    
+    with open(OutPlanCoursePath, 'w', encoding='utf8') as f:
+        f.write(res.text)
+    print('[+] Success. Courses have been saved in ' + OutPlanCoursePath)  
 
     print('[*] Try to catch courses in plan...')
-
+    
     timestamp = int(round(time.time() * 1000))
     reqCourseList = InPlanCoursePage + str(timestamp)
-    try:
-        res = requests.post(url=reqCourseList, data=req_data, headers=headers, verify=False)
-        res.raise_for_status()
-        with open(InPlanCoursePath, 'w', encoding='utf8') as f:
-            f.write(res.text)
-        print('[+] Success. Courses have been saved in ' + InPlanCoursePath)
-    except requests.exceptions.HTTPError as errh:
-        printErr("[-] Fail to catch courses. HTTP ERROR:" + errh)
-    except requests.exceptions.ConnectionError as errc:
-        printErr("[-] Fail to catch courses. Connection ERROR:" + errc)
-    except requests.exceptions.Timeout as errt:
-        printErr("[-] Fail to catch courses. Timeout ERROR:" + errt)
-    except requests.exceptions.RequestException as err:
-        printErr("[-] Fail to catch courses. Unknown ERROR:" + err)   
+    
+    res = postData(reqCourseList, req_data)
+    if not res:
+        exit(1)
+    if not is_valid_json(res.text):
+        exit(1)
+    
+    with open(InPlanCoursePath, 'w', encoding='utf8') as f:
+        f.write(res.text)
+    print('[+] Success. Courses have been saved in ' + InPlanCoursePath)   
 
 
 def findCourse(idList: list):
@@ -124,7 +146,7 @@ def findCourse(idList: list):
         for info in InPlanCourseInfo['datas']:
             if id == info["KCDM"] and info["XQMC"] != "良乡校区" and ("非全" not in info["BJMC"]):
                 targetList.append([info["KCMC"], info["RKJS"], "{}/{}".format(info["DQRS"], info["KXRS"])])
-                courseList.append({'bjdm': info["BJDM"], 'lx': '1', 'csrfToken': ''})
+                courseList.append({'bjdm': info["BJDM"], 'lx': '0', 'csrfToken': ''})
         for info in OutPlanCourseInfo['datas']:
             if id == info["KCDM"] and info["XQMC"] != "良乡校区" and ("非全" not in info["BJMC"]):
                 targetList.append([info["KCMC"], info["RKJS"], "{}/{}".format(info["DQRS"], info["KXRS"])])
@@ -149,6 +171,8 @@ def chooseCourse(course):
         res = json.loads(res.text)
         if(res["code"] == 1):
             printOK("[+] A course is chosen! You can see on Web Browser!")
+        else:
+            logging.debug(res)
         time.sleep(0.01)
 
 
@@ -182,14 +206,23 @@ if __name__ == '__main__':
                          dest="vpn",
                          action='store_true',
                          help="if you choose course through webvpn, then use this")
+    parser.add_argument("-d", "--debug",
+                         dest="debug",
+                         action='store_true',
+                         help="if you want to show debug messages, then use this")
+    
     args = parser.parse_args()
     headers['Cookie'] = args.cookie
 
     if args.vpn is True:
         setVPN()
 
-    if not os.path.exists(InPlanCoursePath) or not os.path.exists(OutPlanCoursePath):
-        getCourseList()
+    if args.debug is True:
+        logging.basicConfig(level = logging.DEBUG,format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    else:
+        logging.basicConfig(format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    getCourseList()
     
     findCourse(args.courseID)
 
