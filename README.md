@@ -72,11 +72,13 @@ optional arguments:
    }
    ```
 
-   需要手动填写`bjdm`，选课按钮右键->检查，查找bjdm代码，位置如下
+   需要手动填写`bjdm`与`lx`
+   `lx`计划内填0，计划外填1
+   选课按钮右键->检查，查找bjdm代码，位置如下
 
    ![image-20231012181121263](https://picgo-111.oss-cn-beijing.aliyuncs.com/img/image-20231012181121263.png)
 
-3. 将课程信息加入列表
+4. 将课程信息加入列表
 
    ```python
    courseList = [
