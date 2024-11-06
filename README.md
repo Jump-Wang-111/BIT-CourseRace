@@ -4,6 +4,8 @@
 
 ## Install
 
+Python 3.8/3.11
+
 ```shell
 pip install -r requirements.txt
 ```
