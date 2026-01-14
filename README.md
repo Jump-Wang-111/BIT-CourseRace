@@ -122,3 +122,10 @@ options:
 
 ~~理解一下，小脚本，哪有什么鲁棒性~~
 
+
+## Acknowledgements
+
+感谢每一位为本项目做出贡献的开发者
+
+* 感谢 **[@fishyy119](https://github.com/fishyy119)** 新增的状态仪表盘、优雅退出以及切换良乡校区课程的功能；
+* 感谢 **[@Boooooom030](https://github.com/Boooooom030)** 新增的浏览器登陆功能。
