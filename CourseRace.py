@@ -271,24 +271,125 @@ def start():
             live.stop()
 
 
+def get_cookie_from_browser(login_url: str = "https://sso.bit.edu.cn/cas/login?service=https:%2F%2Fxk.bit.edu.cn%2Fyjsxkapp%2Fsys%2Fxsxkappbit%2F*default%2Findex.do", 
+                            timeout: int = 300) -> Optional[str]:
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("[*] Playwright模块未安装。请先运行: pip install playwright或取消--auto-login选项")
+        return None
+    
+
+    print("[*]正在启动浏览器")
+    print("[*]请在浏览器中完成登录操作，登录成功后程序将自动获取Cookie")
+    
+    cookie_str = None
+    
+    try:
+        with sync_playwright() as p:
+
+            browser = p.chromium.launch(
+                headless=False,
+                args=[
+                    '--disable-blink-features=AutomationControlled', 
+                ]
+            )
+            
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+                viewport={'width': 1280, 'height': 720}
+            )
+
+            page = context.new_page()
+            
+            print(f"[*] 正在打开登录页面: {login_url}")
+            page.goto(login_url)
+            
+            print("[!] 等待用户登录...")
+            print("[!] 提示: 登录成功后，页面URL会发生变化，程序将自动检测\n")
+            
+            # 等待用户登录
+            start_time = time.time()
+            last_url = page.url
+
+            
+            #循环
+            while time.time() - start_time < timeout:
+                try:
+                    current_url = page.url
+                    
+                    # 检测URL是否变化（可能已登录）
+                    if current_url != last_url:
+                        print(f"[*] 检测到页面跳转: {current_url}")
+                        last_url = current_url
+                    
+                    # 获取所有Cookie
+                    cookies = context.cookies()
+                    
+                    # 检查是否有关键Cookie
+                    has_session_cookie = any(
+                        cookie.get('name') in ['GS_SESSIONID'] 
+                        for cookie in cookies
+                    )
+                    
+                    if has_session_cookie :
+
+                        cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
+                        
+    
+                        print("[*]  Cookie获取成功!")
+                        break
+                    
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    print(f"[!] 检测过程中出现错误: {e}")
+                    time.sleep(1)
+            
+            if cookie_str is None:
+                print(f"\n[!] 超时: 未在 {timeout} 秒内检测到登录")
+                print("[!] 请确保您已完成登录操作\n")
+            
+            # 关闭浏览器
+            browser.close()
+            
+    except Exception as e:
+        print(f"\n[-] ❌ 启动浏览器失败: {e}")
+        print("[!] 请确保已安装Playwright:")
+        print("    pip install playwright")
+        print("    playwright install chromium\n")
+        return None
+    
+    return cookie_str
+
+
 if __name__ == "__main__":
 
     @dataclass
     class Args:
-        cookie: str
+        cookie: Optional[str]
         courseID: Optional[List[str]]
         vpn: bool
         liangxiang: bool
         debug: bool
+        auto_login: bool
 
     parser = argparse.ArgumentParser(description="BIT Course Race. A script to help masters get courses.")
     parser.add_argument(
         "-c",
         "--cookie",
         type=str,
-        required=True,
+        required=False,
         dest="cookie",
         help="Cookie copied from your web browser(after logging in sucessfully)",
+    )
+    parser.add_argument(
+        "-a",
+        "--auto-login",
+        dest="auto_login",
+        action="store_true",
+        help="Automatically open browser with Playwright to get cookie (recommended)",
     )
     parser.add_argument(
         "-i", "--courseID", type=str, dest="courseID", nargs="+", help="ID of courses, split with space"
@@ -304,10 +405,42 @@ if __name__ == "__main__":
     )
     parsed = parser.parse_args()
     args: Args = Args(
-        cookie=parsed.cookie, courseID=parsed.courseID, vpn=parsed.vpn, liangxiang=parsed.liangxiang, debug=parsed.debug
+        cookie=parsed.cookie, courseID=parsed.courseID, vpn=parsed.vpn, 
+        liangxiang=parsed.liangxiang, debug=parsed.debug, auto_login=parsed.auto_login
     )
 
-    headers["Cookie"] = args.cookie
+    # 如果启用自动登录
+    if args.auto_login:
+        print("[*] 启动Playwright自动登录模式...")
+
+        # 根据是否使用VPN选择不同的登录URL
+        if args.vpn:
+            login_url = "https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/*default/index.do?vpn-12-o2-xk.bit.edu.cn"
+        else:
+            login_url = "https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/*default/index.do"
+        
+        cookie = get_cookie_from_browser()
+        
+        if cookie:
+            args.cookie = cookie
+            headers["Cookie"] = cookie
+        else:
+            printErr("\n[-] 自动获取Cookie失败")
+            printErr("[-] 您可以:")
+            printErr("    1. 重新运行程序并使用 -a 参数再试一次")
+            printErr("    2. 手动获取Cookie后使用 -c 参数")
+            printErr("\n示例: python CourseRace.py -c \"你的Cookie\" -i 课程ID\n")
+            exit(1)
+
+    elif not args.cookie:
+        printErr("\n[-] 错误: 未提供Cookie")
+        printErr("[-] 请选择以下方式之一:")
+        printErr("    1. 使用自动登录: python CourseRace.py -a -i 课程ID")
+        printErr("    2. 手动提供Cookie: python CourseRace.py -c \"你的Cookie\" -i 课程ID\n")
+        parser.print_help()
+        exit(1)
+    else:
+        headers["Cookie"] = args.cookie
 
     if args.vpn is True:
         setVPN()

@@ -15,15 +15,15 @@ pip install -r requirements.txt
 ​运行脚本，指定cookie和课程代码，课程代码可以输入多个
 
 ```
-usage: CourseRace.py [-h] -c COOKIE [-i COURSEID [COURSEID ...]] [-v] [-l] [-d]
+usage: CourseRace.py [-h] [-c COOKIE] [-a] [-i COURSEID [COURSEID ...]] [-v] [-l] [-d]
 
 BIT Course Race. A script to help masters get courses.
 
 options:
   -h, --help            show this help message and exit
-  -c COOKIE, --cookie COOKIE
-                        Cookie copied from your web browser(after logging in sucessfully)
-  -i COURSEID [COURSEID ...], --courseID COURSEID [COURSEID ...]
+  -c, --cookie COOKIE   Cookie copied from your web browser(after logging in sucessfully)
+  -a, --auto-login      Automatically open browser with Playwright to get cookie (recommended)
+  -i, --courseID COURSEID [COURSEID ...]
                         ID of courses, split with space
   -v, --vpn             if you choose course through webvpn, then use this
   -l, --liangxiang      switch campuses to Liangxiang campuses
@@ -54,6 +54,17 @@ options:
 ```shell
  python .\CourseRace.py -d -c "your cookie" -i 0018002 0100002 1200008
 ```
+
+如果你希望程序自动打开浏览器登录获取Cookie，请你使用`playwright install chromium`安装浏览器内核
+```shell
+ playwright install chromium
+```
+
+之后可以通过`-a --auto-login`实现浏览器登录
+```shell
+ python .\CourseRace.py -a -i 0018002 0100002 1200008
+```
+
 
 ## Usage by hand
 
