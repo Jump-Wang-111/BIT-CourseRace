@@ -12,11 +12,13 @@ import CourseRace as app
 class CourseRaceTests(unittest.TestCase):
     def setUp(self):
         app.stop_event.clear()
+        app.login_expired.clear()
         self.course = {"bjdm": "test", "lx": "0", "csrfToken": ""}
         app.status["test"] = {"bjmc": "test", "success": 0, "fail": 0}
 
     def tearDown(self):
         app.stop_event.clear()
+        app.login_expired.clear()
         app.status.clear()
 
     def response(self, text='{"code": 0}', status=200):
@@ -24,6 +26,52 @@ class CourseRaceTests(unittest.TestCase):
         response.status_code = status
         response._content = text.encode()
         return response
+
+    def test_expired_login_stops_worker_without_retry(self):
+        replies = [self.response('{"msg":"未登录不能选课","loginUserId":""}'),
+                   self.response(status=401), self.response('{"code":0,"message":"请重新登录"}')]
+        redirect = self.response(status=302)
+        redirect.url = "https://xk.bit.edu.cn/info"
+        redirect.headers["Location"] = "https://sso.bit.edu.cn/cas/login?service=example"
+        replies.append(redirect)
+        login_page = self.response('<html><form>Login</form></html>')
+        login_page.url = "https://sso.bit.edu.cn/cas/login"
+        replies.append(login_page)
+        empty_user = self.response('{"loginUserId":""}')
+        empty_user.url = app.infoPage
+        replies.append(empty_user)
+        for response in replies:
+            with self.subTest(status=response.status_code, url=response.url):
+                app.stop_event.clear()
+                app.login_expired.clear()
+                with patch.object(requests.Session, "request", return_value=response) as request, \
+                        patch.object(app.stop_event, "wait") as wait:
+                    app.chooseCourse(self.course)
+                self.assertTrue(app.stop_event.is_set())
+                self.assertTrue(app.login_expired.is_set())
+                self.assertEqual(request.call_count, 1)
+                wait.assert_not_called()
+                self.assertEqual(app.status["test"]["state"], "Login expired")
+
+    def test_full_course_and_forbidden_are_not_login_expiry(self):
+        for response in [self.response('{"code":0,"msg":"课程人数已满"}'), self.response(status=403)]:
+            with patch.object(requests.Session, "request", return_value=response):
+                try:
+                    app.request_data("POST", "https://example.invalid/choice")
+                except requests.HTTPError:
+                    self.assertEqual(response.status_code, 403)
+            self.assertFalse(app.stop_event.is_set())
+            self.assertFalse(app.login_expired.is_set())
+
+    def test_token_expiry_stops_other_workers(self):
+        with patch.object(app, "courseList", [self.course]), \
+                patch.object(app, "chooseCourse", side_effect=lambda course: app.stop_event.wait()), \
+                patch.object(requests.Session, "request", return_value=self.response('{"msg":"未登录不能选课"}')) as request, \
+                patch.object(app, "Live"):
+            app.start()
+        self.assertTrue(app.stop_event.is_set())
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(app.status["test"]["state"], "Login expired")
 
     def test_worker_recovers_from_bad_response(self):
         failures = [requests.ConnectionError("reset"), requests.ReadTimeout("slow"),

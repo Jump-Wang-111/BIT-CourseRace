@@ -1,6 +1,8 @@
 import argparse
 import json
 import logging
+import re
+from urllib.parse import urljoin, urlsplit
 import threading
 import time
 import warnings
@@ -20,6 +22,53 @@ warnings.simplefilter("ignore", InsecureRequestWarning)  # 只忽略 InsecureReq
 stop_event = threading.Event()
 REQUEST_TIMEOUT = (5, 15)  # connect timeout, read inactivity timeout (seconds)
 use_system_proxy = False
+login_expired = threading.Event()
+_login_lock = threading.Lock()
+
+
+class LoginExpiredError(RuntimeError):
+    """The server explicitly requires a new login."""
+
+
+def _is_login_url(url: str) -> bool:
+    path = urlsplit(url).path.lower().rstrip("/")
+    return bool(re.search(r"/(?:login|index_login)(?:\.(?:do|html|jsp))?$", path))
+
+
+def check_login(response: requests.Response, **kwargs):
+    reason = None
+    if response.status_code == 401:
+        reason = "HTTP 401"
+    for reply in [*response.history, response]:
+        if _is_login_url(reply.url or ""):
+            reason = "登录页面"
+        if reply.is_redirect and _is_login_url(urljoin(reply.url or "", reply.headers.get("Location", ""))):
+            reason = "跳转至登录页面"
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        # Observed unauthenticated BIT info response: msg=未登录不能选课.
+        messages = [payload.get(key) for key in ("msg", "message", "error", "errorMsg")]
+        markers = ("未登录", "未登陆", "请先登录", "请先登陆", "请重新登录", "请重新登陆",
+                   "登录过期", "登录已过期", "登录失效", "登录已失效", "登录超时",
+                   "会话过期", "会话已过期", "会话失效", "session expired",
+                   "session has expired", "not logged in", "please log in", "authentication required")
+        if any(isinstance(message, str) and any(marker in message.lower() for marker in markers)
+               for message in messages):
+            reason = "服务器要求重新登录"
+        if "loadPublicInfo_course.do" in urlsplit(response.url or "").path and payload.get("loginUserId") == "":
+            reason = "当前登录用户为空"
+    if reason:
+        with _login_lock:
+            first = not login_expired.is_set()
+            login_expired.set()
+            stop_event.set()
+            if first:
+                logging.error("登录已失效（%s），已停止所有选课任务。请重新登录，更新 Cookie 后重启脚本。", reason)
+        raise LoginExpiredError(reason)
+    return response
 
 
 def request_data(method: str, url: str, *, session: Optional[requests.Session] = None, **kwargs):
@@ -29,8 +78,9 @@ def request_data(method: str, url: str, *, session: Optional[requests.Session] =
     session.trust_env = use_system_proxy
     response = session.request(
         method, url, headers=headers, verify=False,
-        timeout=REQUEST_TIMEOUT, **kwargs
+        timeout=REQUEST_TIMEOUT, hooks={"response": check_login}, **kwargs
     )
+    check_login(response)
     response.raise_for_status()
     return response
 
@@ -118,6 +168,8 @@ def postData(reqCourseList: str, req_data: Dict[str, str | int]):
         res = request_data("POST", reqCourseList, data=req_data)
         res.raise_for_status()
         return res
+    except LoginExpiredError:
+        return None
     except requests.exceptions.HTTPError as errh:
         printErr("[-] Fail to catch courses. HTTP ERROR:" + str(errh))
     except requests.exceptions.ConnectionError as errc:
@@ -259,6 +311,9 @@ def _choose_course_loop(course: CourseInfo, session: requests.Session):
                 current["fail"] += 1
                 current["state"] = "Rejected"
             stop_event.wait(0.01)
+        except LoginExpiredError:
+            current["state"] = "Login expired"
+            return
         except (requests.exceptions.RequestException, ValueError) as exc:
             errors += 1
             current["fail"] += 1
@@ -294,15 +349,21 @@ def start():
             while not stop_event.is_set():
                 for future, course in futures.items():
                     if future.done():
+                        if stop_event.is_set():
+                            break
                         status[course["bjdm"]]["state"] = "Worker stopped"
                         future.result()  # Surface unexpected worker failures.
                         raise RuntimeError(f"Course worker stopped: {course['bjdm']}")
+                if stop_event.is_set():
+                    break
                 if heartbeat % 30 == 0:
                     try:
                         res = request_data("GET", infoPage, session=session)
                         csrfToken = json.loads(res.text)["csrfToken"]
                         for course in courseList:
                             course["csrfToken"] = csrfToken
+                    except LoginExpiredError:
+                        break
                     except Exception as e:
                         print(f"[ERROR] refresh token failed: {e}")
 
@@ -314,6 +375,10 @@ def start():
             stop_event.set()
         finally:
             stop_event.set()
+            if login_expired.is_set():
+                for current in status.values():
+                    current["state"] = "Login expired"
+                live.update(make_status_table())
             live.stop()
 
 
