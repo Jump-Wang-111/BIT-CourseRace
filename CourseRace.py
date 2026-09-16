@@ -6,7 +6,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Dict, List, Optional, TypedDict, cast
+from typing import Dict, List, Optional, TypedDict, cast, NotRequired
 
 import requests
 from prettytable import PrettyTable
@@ -18,6 +18,21 @@ warnings.simplefilter("ignore", InsecureRequestWarning)  # 只忽略 InsecureReq
 # requests.packages.urllib3.disable_warnings()
 
 stop_event = threading.Event()
+REQUEST_TIMEOUT = (5, 15)  # connect timeout, read inactivity timeout (seconds)
+use_system_proxy = False
+
+
+def request_data(method: str, url: str, *, session: Optional[requests.Session] = None, **kwargs):
+    if session is None:
+        with requests.Session() as temporary_session:
+            return request_data(method, url, session=temporary_session, **kwargs)
+    session.trust_env = use_system_proxy
+    response = session.request(
+        method, url, headers=headers, verify=False,
+        timeout=REQUEST_TIMEOUT, **kwargs
+    )
+    response.raise_for_status()
+    return response
 
 sourceUrl = "https://xk.bit.edu.cn/yjsxkapp/sys/xsxkappbit/xsxkCourse/choiceCourse.do?_="
 sourceUrl_vpn = "https://webvpn.bit.edu.cn/https/77726476706e69737468656265737421e8fc0f9e2e2426557a1dc7af96/yjsxkapp/sys/xsxkappbit/xsxkCourse/choiceCourse.do?vpn-12-o2-xk.bit.edu.cn&_="
@@ -67,6 +82,7 @@ class StatusInfo(TypedDict):
     bjmc: str
     success: int
     fail: int
+    state: NotRequired[str]
 
 
 status: Dict[str, StatusInfo] = {}
@@ -99,7 +115,7 @@ def is_valid_json(json_str: str):
 
 def postData(reqCourseList: str, req_data: Dict[str, str | int]):
     try:
-        res = requests.post(url=reqCourseList, data=req_data, headers=headers, verify=False)
+        res = request_data("POST", reqCourseList, data=req_data)
         res.raise_for_status()
         return res
     except requests.exceptions.HTTPError as errh:
@@ -216,18 +232,42 @@ def findCourse(idList: List[str], XQMC: str):
 
 
 def chooseCourse(course: CourseInfo):
+    # The worker owns its connection pool and closes it on every exit path.
+    with requests.Session() as session:
+        _choose_course_loop(course, session)
+
+
+def _choose_course_loop(course: CourseInfo, session: requests.Session):
+    current = status[course["bjdm"]]
+    errors = 0
     while not stop_event.is_set():
         timestamp = int(round(time.time() * 1000))
         courseUrl = sourceUrl + str(timestamp)
-        res = requests.post(url=courseUrl, data=course, headers=headers, verify=False)
-        res = json.loads(res.text)
-        if res["code"] == 1:
-            printOK(f"[+] A course is chosen! You can see on Web Browser! [{status[course['bjdm']]['bjmc']}]")
-            status[course["bjdm"]]["success"] += 1
-        else:
-            logging.debug(res)
-            status[course["bjdm"]]["fail"] += 1
-        time.sleep(0.01)
+        try:
+            current["state"] = "Requesting"
+            response = request_data("POST", courseUrl, session=session, data=course.copy())
+            res = json.loads(response.text)
+            if not isinstance(res, dict) or "code" not in res:
+                raise ValueError("Response has no course result code")
+            errors = 0
+            if res["code"] == 1:
+                printOK(f"[+] A course is chosen! You can see on Web Browser! [{current['bjmc']}]")
+                current["success"] += 1
+                current["state"] = "Success"
+            else:
+                logging.debug(res)
+                current["fail"] += 1
+                current["state"] = "Rejected"
+            stop_event.wait(0.01)
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            errors += 1
+            current["fail"] += 1
+            delay = min(2 ** min(errors, 5), 30)
+            current["state"] = f"{type(exc).__name__}; retry {delay}s"
+            # Avoid logging response bodies or credentials on malformed replies.
+            if errors == 1 or errors % 10 == 0:
+                logging.warning("[%s] %s; retry in %ss", current["bjmc"], type(exc).__name__, delay)
+            stop_event.wait(delay)
 
 
 def make_status_table():
@@ -235,26 +275,31 @@ def make_status_table():
     table.add_column("Name", justify="center")
     table.add_column("S", justify="center")
     table.add_column("F", justify="center")
+    table.add_column("State", justify="left")
 
     for _, s in status.items():
-        table.add_row(s["bjmc"], str(s["success"]), str(s["fail"]))
+        table.add_row(s["bjmc"], str(s["success"]), str(s["fail"]), s.get("state", "Starting"))
     return table
 
 
 def start():
     print("[*] Start race...Please wait for servel hours...")
-    with ThreadPoolExecutor(max_workers=len(courseList)) as pool:
-        for course in courseList:
-            pool.submit(chooseCourse, course)
+    with requests.Session() as session, ThreadPoolExecutor(max_workers=len(courseList)) as pool:
+        futures = {pool.submit(chooseCourse, course): course for course in courseList}
 
         heartbeat = 0
         live = Live(make_status_table(), refresh_per_second=2)
         live.start()
         try:
             while not stop_event.is_set():
+                for future, course in futures.items():
+                    if future.done():
+                        status[course["bjdm"]]["state"] = "Worker stopped"
+                        future.result()  # Surface unexpected worker failures.
+                        raise RuntimeError(f"Course worker stopped: {course['bjdm']}")
                 if heartbeat % 30 == 0:
                     try:
-                        res = requests.get(url=infoPage, headers=headers, verify=False)
+                        res = request_data("GET", infoPage, session=session)
                         csrfToken = json.loads(res.text)["csrfToken"]
                         for course in courseList:
                             course["csrfToken"] = csrfToken
@@ -268,6 +313,7 @@ def start():
             print("[*] Ctrl+C pressed, stopping all threads...")
             stop_event.set()
         finally:
+            stop_event.set()
             live.stop()
 
 
@@ -377,6 +423,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="BIT Course Race. A script to help masters get courses.")
     parser.add_argument(
+        "--use-system-proxy", action="store_true",
+        help="Use system/environment proxies (default: direct connection)",
+    )
+    parser.add_argument(
         "-c",
         "--cookie",
         type=str,
@@ -404,6 +454,7 @@ if __name__ == "__main__":
         "-d", "--debug", dest="debug", action="store_true", help="if you want to show debug messages, then use this"
     )
     parsed = parser.parse_args()
+    use_system_proxy = parsed.use_system_proxy
     args: Args = Args(
         cookie=parsed.cookie, courseID=parsed.courseID, vpn=parsed.vpn, 
         liangxiang=parsed.liangxiang, debug=parsed.debug, auto_login=parsed.auto_login

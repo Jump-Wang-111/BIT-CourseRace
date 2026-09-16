@@ -12,6 +12,28 @@ pip install -r requirements.txt
 
 ## Usage
 
+WSL 下可创建并使用专用环境（手动 Cookie 模式无需 Playwright）：
+
+```bash
+conda create -n bit-course python=3.12 requests prettytable rich -y
+conda activate bit-course
+cd /mnt/f/tools/BIT-CourseRace
+python CourseRace.py -c "你的Cookie" -i 0300202 2700059 1700005 1700004 4400042
+```
+
+HTTP 请求默认直连，不读取系统/环境代理；需要走代理时添加 `--use-system-proxy`。
+每个选课线程独立持有并复用自己的 Session/连接池，退出时关闭；Token 刷新也使用独立的 Session。
+正常请求间隔仍为 0.01 秒，异常重试退避间隔不变。实际能否复用 TCP 连接取决于服务端是否保持连接。
+`-v` 仍表示学校 WebVPN，与系统代理开关独立。TUN/透明代理无法通过这个开关绕过，
+若仍有连接错误，请在代理软件中将 `xk.bit.edu.cn` 和 `webvpn.bit.edu.cn` 设置为直连。
+
+所有请求设置连接超时 5 秒、读取无数据超时 15 秒（不是整个请求的总耗时上限）。
+单个班级遇到网络、HTTP 或响应格式异常时会计入 F，并按 2–30 秒退避重试。
+状态表新增 State，显示请求中、拒绝、成功或异常重试状态；持续格式异常时请检查 Cookie 是否过期。
+意外的程序异常会显式报错并停止其他任务，避免某个班级无声退出。
+
+本地回归验证：`python -B -m unittest discover -s tests -v`，不会请求选课服务器。
+
 ​运行脚本，指定cookie和课程代码，课程代码可以输入多个
 
 ```
