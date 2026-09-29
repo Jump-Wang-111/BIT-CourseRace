@@ -2,6 +2,20 @@
 
 北京理工大学研究生抢课脚本
 
+## 测试与回退
+
+当前异常重试、登录失效检测及停止逻辑仅通过模拟测试，**未经实际抢课场景测试**。
+
+如需回退，先停止正在运行的脚本，在仓库目录执行以下命令，在独立目录使用修改前的版本（保留当前目录及本地修改）：
+
+```shell
+git worktree add --detach ../BIT-CourseRace-rollback 5f3fc62515174ed9b3dd6bdb9af8162380b1d3e9
+cd ../BIT-CourseRace-rollback
+python CourseRace.py -c "your cookie" -i 0018002 0100002 1200008
+```
+
+沿用原 Python 环境，替换 Cookie 和课程代码；若回退目录已存在，请换一个未使用的目录名。旧版仍可能持续重试或无法识别登录失效，回退不代表这些问题已解决。
+
 ## Install
 
 Python 3.12
@@ -11,28 +25,6 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-
-WSL 下可创建并使用专用环境（手动 Cookie 模式无需 Playwright）：
-
-```bash
-conda create -n bit-course python=3.12 requests prettytable rich -y
-conda activate bit-course
-cd /mnt/f/tools/BIT-CourseRace
-python CourseRace.py -c "你的Cookie" -i 0300202 2700059 1700005 1700004 4400042
-```
-
-HTTP 请求默认直连，不读取系统/环境代理；需要走代理时添加 `--use-system-proxy`。
-每个选课线程独立持有并复用自己的 Session/连接池，退出时关闭；Token 刷新也使用独立的 Session。
-正常请求间隔仍为 0.01 秒，异常重试退避间隔不变。实际能否复用 TCP 连接取决于服务端是否保持连接。
-`-v` 仍表示学校 WebVPN，与系统代理开关独立。TUN/透明代理无法通过这个开关绕过，
-若仍有连接错误，请在代理软件中将 `xk.bit.edu.cn` 和 `webvpn.bit.edu.cn` 设置为直连。
-
-所有请求设置连接超时 5 秒、读取无数据超时 15 秒（不是整个请求的总耗时上限）。
-单个班级遇到网络、HTTP 或响应格式异常时会计入 F，并按 2–30 秒退避重试。
-状态表新增 State，显示请求中、拒绝、成功或异常重试状态。识别到 HTTP 401、登录跳转、明确的未登录/会话失效提示，或课程信息接口返回空登录用户时，会停止全部任务并提示更新 Cookie。满员等普通失败、单独的 HTTP 403、无明确登录信号的格式异常仍按原规则处理。
-意外的程序异常会显式报错并停止其他任务，避免某个班级无声退出。
-
-本地回归验证：`python -B -m unittest discover -s tests -v`，不会请求选课服务器。
 
 ​运行脚本，指定cookie和课程代码，课程代码可以输入多个
 
