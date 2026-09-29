@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import re
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 import threading
 import time
@@ -21,13 +22,66 @@ warnings.simplefilter("ignore", InsecureRequestWarning)  # 只忽略 InsecureReq
 
 stop_event = threading.Event()
 REQUEST_TIMEOUT = (5, 15)  # connect timeout, read inactivity timeout (seconds)
+UNAVAILABLE_TIMEOUT = 300  # Continuous failure duration, not a request count.
 use_system_proxy = False
 login_expired = threading.Event()
+stop_reason: Optional[str] = None
+_stop_lock = threading.Lock()
 _login_lock = threading.Lock()
 
 
 class LoginExpiredError(RuntimeError):
     """The server explicitly requires a new login."""
+
+
+@dataclass
+class RetryState:
+    since: Optional[float] = None
+    attempts: int = 0
+    kind: str = ""
+
+    def expired(self):
+        return self.since is not None and time.monotonic() - self.since >= UNAVAILABLE_TIMEOUT
+
+    def failure(self, exc):
+        now = time.monotonic()
+        if self.since is None:
+            self.since = now
+        self.attempts += 1
+        delay = min(2 ** min(self.attempts, 5), 30)
+        response = getattr(exc, "response", None)
+        if response is not None:
+            code = response.status_code
+            self.kind = f"HTTP {code}"
+            if code == 429:
+                self.kind = "Rate limited (429)"
+                value = response.headers.get("Retry-After", "")
+                try:
+                    retry_after = int(value)
+                except ValueError:
+                    try:
+                        retry_after = parsedate_to_datetime(value).timestamp() - time.time()
+                    except (ValueError, TypeError, OverflowError):
+                        retry_after = 0
+                delay = max(delay, retry_after)
+        elif isinstance(exc, requests.exceptions.Timeout):
+            self.kind = "Timeout"
+        elif isinstance(exc, requests.exceptions.ConnectionError):
+            self.kind = "Connection error"
+        elif isinstance(exc, ValueError):
+            self.kind = "Invalid response"
+        else:
+            self.kind = type(exc).__name__
+        elapsed = now - self.since
+        return min(delay, max(0, UNAVAILABLE_TIMEOUT - elapsed)), elapsed
+
+
+def stop_with_reason(reason: str):
+    global stop_reason
+    with _stop_lock:
+        if stop_reason is None:
+            stop_reason = reason
+    stop_event.set()
 
 
 def _is_login_url(url: str) -> bool:
@@ -60,11 +114,21 @@ def check_login(response: requests.Response, **kwargs):
             reason = "服务器要求重新登录"
         if "loadPublicInfo_course.do" in urlsplit(response.url or "").path and payload.get("loginUserId") == "":
             reason = "当前登录用户为空"
+    body = response.text[:8192]
+    body_lower = body.lower()
+    content_type = response.headers.get("Content-Type", "").lower()
+    if ("text/html" in content_type or "<html" in body_lower) and (
+        "cas/login" in body_lower
+        or "<title>login" in body_lower
+        or ("<form" in body_lower and 'type="password"' in body_lower
+            and ("login" in body_lower or "登录" in body))
+    ):
+        reason = "登录页面"
     if reason:
         with _login_lock:
             first = not login_expired.is_set()
             login_expired.set()
-            stop_event.set()
+            stop_with_reason("Login expired")
             if first:
                 logging.error("登录已失效（%s），已停止所有选课任务。请重新登录，更新 Cookie 后重启脚本。", reason)
         raise LoginExpiredError(reason)
@@ -132,6 +196,7 @@ class StatusInfo(TypedDict):
     bjmc: str
     success: int
     fail: int
+    errors: NotRequired[int]
     state: NotRequired[str]
 
 
@@ -291,8 +356,12 @@ def chooseCourse(course: CourseInfo):
 
 def _choose_course_loop(course: CourseInfo, session: requests.Session):
     current = status[course["bjdm"]]
-    errors = 0
+    retry = RetryState()
     while not stop_event.is_set():
+        if retry.expired():
+            current["state"] = "Unavailable"
+            logging.error("[%s] 连续 %ss 无有效响应，停止该班级：%s", current["bjmc"], UNAVAILABLE_TIMEOUT, retry.kind)
+            return
         timestamp = int(round(time.time() * 1000))
         courseUrl = sourceUrl + str(timestamp)
         try:
@@ -301,7 +370,7 @@ def _choose_course_loop(course: CourseInfo, session: requests.Session):
             res = json.loads(response.text)
             if not isinstance(res, dict) or "code" not in res:
                 raise ValueError("Response has no course result code")
-            errors = 0
+            retry = RetryState()
             if res["code"] == 1:
                 printOK(f"[+] A course is chosen! You can see on Web Browser! [{current['bjmc']}]")
                 current["success"] += 1
@@ -315,13 +384,11 @@ def _choose_course_loop(course: CourseInfo, session: requests.Session):
             current["state"] = "Login expired"
             return
         except (requests.exceptions.RequestException, ValueError) as exc:
-            errors += 1
-            current["fail"] += 1
-            delay = min(2 ** min(errors, 5), 30)
-            current["state"] = f"{type(exc).__name__}; retry {delay}s"
-            # Avoid logging response bodies or credentials on malformed replies.
-            if errors == 1 or errors % 10 == 0:
-                logging.warning("[%s] %s; retry in %ss", current["bjmc"], type(exc).__name__, delay)
+            current["errors"] = current.get("errors", 0) + 1
+            delay, elapsed = retry.failure(exc)
+            current["state"] = f"{retry.kind}; unavailable {elapsed:.0f}s; retry {delay:.0f}s"
+            if retry.attempts == 1 or retry.attempts % 10 == 0:
+                logging.warning("[%s] %s; unavailable %.0fs; retry %.0fs", current["bjmc"], retry.kind, elapsed, delay)
             stop_event.wait(delay)
 
 
@@ -330,10 +397,11 @@ def make_status_table():
     table.add_column("Name", justify="center")
     table.add_column("S", justify="center")
     table.add_column("F", justify="center")
+    table.add_column("E", justify="center")
     table.add_column("State", justify="left")
 
     for _, s in status.items():
-        table.add_row(s["bjmc"], str(s["success"]), str(s["fail"]), s.get("state", "Starting"))
+        table.add_row(s["bjmc"], str(s["success"]), str(s["fail"]), str(s.get("errors", 0)), s.get("state", "Starting"))
     return table
 
 
@@ -342,7 +410,9 @@ def start():
     with requests.Session() as session, ThreadPoolExecutor(max_workers=len(courseList)) as pool:
         futures = {pool.submit(chooseCourse, course): course for course in courseList}
 
-        heartbeat = 0
+        next_refresh = 0.0
+        heartbeat_retry = RetryState()
+        heartbeat_state = ""
         live = Live(make_status_table(), refresh_per_second=2)
         live.start()
         try:
@@ -351,25 +421,43 @@ def start():
                     if future.done():
                         if stop_event.is_set():
                             break
+                        if status[course["bjdm"]].get("state") == "Unavailable":
+                            future.result()
+                            continue
                         status[course["bjdm"]]["state"] = "Worker stopped"
                         future.result()  # Surface unexpected worker failures.
                         raise RuntimeError(f"Course worker stopped: {course['bjdm']}")
                 if stop_event.is_set():
                     break
-                if heartbeat % 30 == 0:
+                if all(future.done() for future in futures):
+                    stop_with_reason("All course workers unavailable")
+                    break
+                if heartbeat_retry.expired():
+                    stop_with_reason("Token refresh unavailable")
+                    break
+                if time.monotonic() >= next_refresh:
                     try:
                         res = request_data("GET", infoPage, session=session)
-                        csrfToken = json.loads(res.text)["csrfToken"]
+                        payload = json.loads(res.text)
+                        if not isinstance(payload, dict) or not isinstance(payload.get("csrfToken"), str) or not payload["csrfToken"]:
+                            raise ValueError("Missing csrfToken")
+                        csrfToken = payload["csrfToken"]
                         for course in courseList:
                             course["csrfToken"] = csrfToken
+                        heartbeat_retry = RetryState()
+                        heartbeat_state = ""
+                        next_refresh = time.monotonic() + 60
                     except LoginExpiredError:
                         break
-                    except Exception as e:
-                        print(f"[ERROR] refresh token failed: {e}")
-
-                live.update(make_status_table())
+                    except (requests.exceptions.RequestException, ValueError) as exc:
+                        delay, elapsed = heartbeat_retry.failure(exc)
+                        heartbeat_state = f"Token: {heartbeat_retry.kind}; unavailable {elapsed:.0f}s; retry {delay:.0f}s"
+                        logging.warning(heartbeat_state)
+                        next_refresh = time.monotonic() + delay
+                table = make_status_table()
+                table.caption = heartbeat_state or None
+                live.update(table)
                 time.sleep(2)
-                heartbeat += 1
         except KeyboardInterrupt:
             print("[*] Ctrl+C pressed, stopping all threads...")
             stop_event.set()
@@ -380,6 +468,8 @@ def start():
                     current["state"] = "Login expired"
                 live.update(make_status_table())
             live.stop()
+            if stop_reason:
+                printErr(f"[-] Course race stopped: {stop_reason}.")
 
 
 def get_cookie_from_browser(login_url: str = "https://sso.bit.edu.cn/cas/login?service=https:%2F%2Fxk.bit.edu.cn%2Fyjsxkapp%2Fsys%2Fxsxkappbit%2F*default%2Findex.do", 
